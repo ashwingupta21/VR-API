@@ -1,4 +1,3 @@
-
 # server.py
 # local PC command: uvicorn server:app --host 0.0.0.0 --port 8000
 # local network command: ws://10.150.52.215:8000/ws
@@ -9,6 +8,8 @@ from contextlib import asynccontextmanager
 import asyncio
 import json
 from typing import List
+import serial
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -86,26 +87,30 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
-async def send_data(manager: ConnectionManager):
-    """
-    Sends data to clients
-    """
-    while True:
-        # Example data - replace with your dynamic data as needed
-        vector = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
-        text = "Hello World"  # Example text data
+async def send_data(manager):
+    try:
+        ser = serial.Serial(port="COM6", baudrate=115200, timeout=1)
+        print(f"Serial connection opened on {ser.port} at {ser.baudrate} baud.")
+        
+        while True:
+            if ser.in_waiting > 0:
+                line = ser.readline()
+                decoded_line = line.decode('utf-8').strip()
+                try:
+                    emg_value = int(decoded_line)
+                    if emg_value > 100:
+                        emg_data = 1
+                    else:
+                        emg_data = 0
+                except ValueError:
+                    emg_data = 0
 
-        # Create the message payload
-        message = {
-            "vector": vector,
-            "text": text
-        }
+                print(f"Received EMG data: {emg_value}")
+                
+                # Send the number as a string (e.g., "0", "1", "532", etc.)
+                await manager.broadcast(str(emg_data))
+            
+            await asyncio.sleep(0.01)
 
-        # Serialize the message to JSON
-        message_json = json.dumps(message)
-
-        # Broadcast the message to all connected clients
-        await manager.broadcast(message_json)
-
-        # Wait for 0.1 seconds (10 times per second)
-        await asyncio.sleep(0.1)
+    except Exception as e:
+        print(f"Error in send_data: {e}")
