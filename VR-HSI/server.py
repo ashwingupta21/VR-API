@@ -12,7 +12,34 @@ import serial
 import serial.tools.list_ports
 import platform
 import time
+import atexit
+import signal
 
+# Global variable to store the serial connection
+global_serial = None
+
+def cleanup_serial():
+    """
+    Cleanup function to properly close the serial port
+    """
+    global global_serial
+    if global_serial and global_serial.is_open:
+        print("Cleaning up serial connection...")
+        global_serial.close()
+        print("Serial connection closed.")
+
+def signal_handler(signum, frame):
+    """
+    Signal handler for graceful shutdown
+    """
+    print("\nReceived signal to terminate. Cleaning up...")
+    cleanup_serial()
+    exit(0)
+
+# Register cleanup handlers
+atexit.register(cleanup_serial)
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -126,14 +153,14 @@ async def send_data(manager):
     """
     Continuously read data from the EMG device and broadcast it to connected clients.
     """
+    global global_serial
     port = None
-    ser = None
     retry_count = 0
     max_retries = 3
     
     while True:
         try:
-            if ser is None or not ser.is_open:
+            if global_serial is None or not global_serial.is_open:
                 if port is None:
                     port = find_emg_port()
                     if port is None:
@@ -141,13 +168,20 @@ async def send_data(manager):
                         await asyncio.sleep(5)
                         continue
                 
+                # Try to close the port if it's busy
+                try:
+                    temp_ser = serial.Serial(port)
+                    temp_ser.close()
+                except:
+                    pass
+                
                 print(f"Attempting to connect to {port}...")
-                ser = serial.Serial(port=port, baudrate=115200, timeout=1)
+                global_serial = serial.Serial(port=port, baudrate=115200, timeout=1)
                 print(f"Successfully connected to {port}")
                 retry_count = 0  # Reset retry count on successful connection
             
-            if ser.in_waiting > 0:
-                line = ser.readline()
+            if global_serial.in_waiting > 0:
+                line = global_serial.readline()
                 try:
                     decoded_line = line.decode('utf-8').strip()
                     emg_value = int(decoded_line)
@@ -167,9 +201,9 @@ async def send_data(manager):
             
         except serial.SerialException as e:
             print(f"Serial port error: {e}")
-            if ser and ser.is_open:
-                ser.close()
-            ser = None
+            if global_serial and global_serial.is_open:
+                global_serial.close()
+            global_serial = None
             
             retry_count += 1
             if retry_count >= max_retries:
@@ -182,9 +216,9 @@ async def send_data(manager):
             
         except Exception as e:
             print(f"Unexpected error: {e}")
-            if ser and ser.is_open:
-                ser.close()
-            ser = None
+            if global_serial and global_serial.is_open:
+                global_serial.close()
+            global_serial = None
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
