@@ -9,6 +9,9 @@ import asyncio
 import json
 from typing import List
 import serial
+import serial.tools.list_ports
+import platform
+import time
 
 
 @asynccontextmanager
@@ -87,30 +90,125 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
+def find_emg_port():
+    """
+    Find the appropriate serial port for the EMG device.
+    Returns the port name or None if not found.
+    """
+    system = platform.system()
+    
+    # List all available ports
+    ports = list(serial.tools.list_ports.comports())
+    
+    if not ports:
+        print("No serial ports found!")
+        return None
+    
+    print("\nAvailable ports:")
+    for port in ports:
+        print(f"- {port.device}: {port.description}")
+    
+    # Try to find the EMG device
+    # Common identifiers for USB-to-Serial devices
+    common_identifiers = ['USB', 'Serial', 'FTDI', 'CH340', 'CP210']
+    
+    for port in ports:
+        # Check if any identifier is in the port description
+        if any(identifier in port.description for identifier in common_identifiers):
+            print(f"\nFound potential EMG device on port: {port.device}")
+            return port.device
+    
+    # If no specific device found, return the first available port
+    print(f"\nNo specific EMG device found. Using first available port: {ports[0].device}")
+    return ports[0].device
+
 async def send_data(manager):
-    try:
-        ser = serial.Serial(port="COM6", baudrate=115200, timeout=1)
-        print(f"Serial connection opened on {ser.port} at {ser.baudrate} baud.")
-        
-        while True:
+    """
+    Continuously read data from the EMG device and broadcast it to connected clients.
+    """
+    port = None
+    ser = None
+    retry_count = 0
+    max_retries = 3
+    
+    while True:
+        try:
+            if ser is None or not ser.is_open:
+                if port is None:
+                    port = find_emg_port()
+                    if port is None:
+                        print("No suitable port found. Retrying in 5 seconds...")
+                        await asyncio.sleep(5)
+                        continue
+                
+                print(f"Attempting to connect to {port}...")
+                ser = serial.Serial(port=port, baudrate=115200, timeout=1)
+                print(f"Successfully connected to {port}")
+                retry_count = 0  # Reset retry count on successful connection
+            
             if ser.in_waiting > 0:
                 line = ser.readline()
-                decoded_line = line.decode('utf-8').strip()
                 try:
+                    decoded_line = line.decode('utf-8').strip()
                     emg_value = int(decoded_line)
-                    if emg_value > 100:
-                        emg_data = 1
-                    else:
-                        emg_data = 0
-                except ValueError:
-                    emg_data = 0
-
-                print(f"Received EMG data: {emg_value}")
-                
-                # Send the number as a string (e.g., "0", "1", "532", etc.)
-                await manager.broadcast(str(emg_data))
+                    
+                    # Process EMG data
+                    emg_data = 1 if emg_value > 100 else 0
+                    print(f"Received EMG data: {emg_value} -> {emg_data}")
+                    
+                    # Broadcast the processed data
+                    await manager.broadcast(str(emg_data))
+                except ValueError as e:
+                    print(f"Error decoding data: {e}")
+                except Exception as e:
+                    print(f"Error processing data: {e}")
             
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.01)  # Small delay to prevent CPU overuse
+            
+        except serial.SerialException as e:
+            print(f"Serial port error: {e}")
+            if ser and ser.is_open:
+                ser.close()
+            ser = None
+            
+            retry_count += 1
+            if retry_count >= max_retries:
+                print("Max retries reached. Resetting port detection...")
+                port = None
+                retry_count = 0
+            
+            print(f"Retrying in 5 seconds... (Attempt {retry_count}/{max_retries})")
+            await asyncio.sleep(5)
+            
+        except Exception as e:
+            print(f"Unexpected error: {e}")
+            if ser and ser.is_open:
+                ser.close()
+            ser = None
+            await asyncio.sleep(5)
 
-    except Exception as e:
-        print(f"Error in send_data: {e}")
+if __name__ == "__main__":
+    import sys
+    import subprocess
+
+    # Ensure pyngrok is installed
+    try:
+        from pyngrok import ngrok
+    except ImportError:
+        print("pyngrok not found, installing...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pyngrok"])
+        from pyngrok import ngrok
+
+    import uvicorn
+
+    # Configure ngrok with authtoken
+    ngrok.set_auth_token("2wecdhovZ3IDU2nSqZoYTZF9ozk_4a2QygnpmbPvquxroXtaT")
+
+    # Start ngrok tunnel
+    port = 8000
+    public_url = ngrok.connect(port, "http").public_url
+    print(f"ngrok tunnel established. Public URL: {public_url}/ws")
+    print("You can share this URL with remote WebSocket clients.")
+
+    # Start the FastAPI server
+    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
