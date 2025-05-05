@@ -14,9 +14,33 @@ import platform
 import time
 import atexit
 import signal
+import subprocess
+import os
 
 # Global variable to store the serial connection
 global_serial = None
+
+def force_close_port(port):
+    """
+    Force close a busy port on macOS
+    """
+    if platform.system() == 'Darwin':  # macOS
+        try:
+            # Find processes using the port
+            cmd = f"lsof {port}"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            
+            if result.stdout:
+                # Get the PID from the output
+                lines = result.stdout.split('\n')
+                if len(lines) > 1:  # First line is header
+                    pid = lines[1].split()[1]
+                    # Kill the process
+                    subprocess.run(f"kill -9 {pid}", shell=True)
+                    print(f"Killed process {pid} using port {port}")
+                    time.sleep(1)  # Wait for port to be released
+        except Exception as e:
+            print(f"Error while trying to force close port: {e}")
 
 def cleanup_serial():
     """
@@ -27,6 +51,9 @@ def cleanup_serial():
         print("Cleaning up serial connection...")
         global_serial.close()
         print("Serial connection closed.")
+    # Force close the port if it's still busy
+    if platform.system() == 'Darwin':
+        force_close_port(global_serial.port if global_serial else None)
 
 def signal_handler(signum, frame):
     """
@@ -168,17 +195,25 @@ async def send_data(manager):
                         await asyncio.sleep(5)
                         continue
                 
-                # Try to close the port if it's busy
-                try:
-                    temp_ser = serial.Serial(port)
-                    temp_ser.close()
-                except:
-                    pass
+                # Force close the port if it's busy
+                if platform.system() == 'Darwin':
+                    force_close_port(port)
                 
                 print(f"Attempting to connect to {port}...")
-                global_serial = serial.Serial(port=port, baudrate=115200, timeout=1)
-                print(f"Successfully connected to {port}")
-                retry_count = 0  # Reset retry count on successful connection
+                try:
+                    global_serial = serial.Serial(port=port, baudrate=115200, timeout=1)
+                    print(f"Successfully connected to {port}")
+                    retry_count = 0  # Reset retry count on successful connection
+                except serial.SerialException as e:
+                    if "Resource busy" in str(e):
+                        print(f"Port {port} is busy. Attempting to force close...")
+                        force_close_port(port)
+                        # Try one more time after force close
+                        global_serial = serial.Serial(port=port, baudrate=115200, timeout=1)
+                        print(f"Successfully connected to {port} after force close")
+                        retry_count = 0
+                    else:
+                        raise e
             
             if global_serial.in_waiting > 0:
                 line = global_serial.readline()
