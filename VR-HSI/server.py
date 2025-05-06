@@ -257,27 +257,8 @@ async def send_data(manager):
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
-    import sys
-    import subprocess
-
-    # Ensure pyngrok is installed
-    try:
-        from pyngrok import ngrok
-    except ImportError:
-        print("pyngrok not found, installing...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "pyngrok"])
-        from pyngrok import ngrok
-
     import uvicorn
-
-    # Configure ngrok with authtoken
-    ngrok.set_auth_token("2wecdhovZ3IDU2nSqZoYTZF9ozk_4a2QygnpmbPvquxroXtaT")
-
-    # Start ngrok tunnel
-    port = 8000
-    public_url = ngrok.connect(port, "http").public_url
-    print(f"ngrok tunnel established. Public URL: {public_url}/ws")
-    print("You can share this URL with remote WebSocket clients.")
-
-    # Start the FastAPI server
-    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
+    print("Starting WebSocket server on port 8000...")
+    print("Local WebSocket URL: ws://localhost:8000/ws")
+    print("Press Ctrl+C to stop the server")
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)
