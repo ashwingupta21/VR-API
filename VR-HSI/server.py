@@ -16,6 +16,7 @@ import atexit
 import signal
 import subprocess
 import os
+import socket
 
 # Global variable to store the serial connection
 global_serial = None
@@ -258,7 +259,22 @@ async def send_data(manager):
 
 if __name__ == "__main__":
     import uvicorn
-    print("Starting WebSocket server on port 8000...")
-    print("Local WebSocket URL: ws://localhost:8000/ws")
+
+    def get_local_ip():
+        try:
+            # Create a socket to get the local IP
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            return local_ip
+        except Exception:
+            return "127.0.0.1"
+
+    local_ip = get_local_ip()
+    print("\n=== Server Information ===")
+    print(f"Local WebSocket URL: ws://localhost:8000/ws")
+    print(f"Network WebSocket URL: ws://{local_ip}:8000/ws")
     print("Press Ctrl+C to stop the server")
+    print("========================\n")
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)
